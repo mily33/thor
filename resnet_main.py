@@ -48,10 +48,10 @@ def main():
     # ==================
     # Def Hyperparameter
     # ==================
-    learning_rate = 0.01
+    learning_rate = 0.001
     alpha = 0.5            # loss penalty
     ac_dim = 4
-    gamma = 0.99           # discount factor
+    gamma = 0.9            # discount factor
     tf.set_random_seed(1)
 
     # ===========
@@ -76,7 +76,7 @@ def main():
     loss_actor = -tf.reduce_mean(sy_logprob_n * sy_adv_n)
 
     # =========== Update Critic ===========
-    q_var = current_value * tf.one_hot(sy_ac_na, ac_dim)
+    q_var = current_value
     target_q_var = reward + (1 - done_ph) * next_value * gamma
 
     loss_critic = tf.reduce_mean(tf.squared_difference(target_q_var, q_var))
@@ -108,9 +108,9 @@ def main():
     # ===========
 
     # ====== Initialize ======
-    max_len_step = 15
-    max_iteration = 3
-    min_timesteps_per_batch = 10
+    max_len_step = 1000
+    max_iteration = 10
+    min_timesteps_per_batch = 100
     iteration = 0
     # max_size = 10000
     # frame_num = 4
@@ -163,7 +163,6 @@ def main():
                 dones.append(done)
                 steps += 1
                 if done or steps > max_len_step:
-                    done = 1.0
                     break
             path = {"observation": np.array(obs),
                     "reward": np.array(rewards),
@@ -182,9 +181,9 @@ def main():
         ob_no = np.concatenate([path["observation"] for path in paths])
         ac_na = np.concatenate([path["action"] for path in paths])
         next_ob_no = np.concatenate([path['next_ob'] for path in paths])
+        rew_no = np.concatenate([path['reward'] for path in paths])
         done_mask = np.concatenate([path['done'] for path in paths])
         target_ob_no = np.concatenate([target_img for i in range(ob_no.shape[0])])
-        print(done_mask.shape)
 
         q_n = []
         for path in paths:
@@ -196,7 +195,6 @@ def main():
                 q = [np.sum(np.power(gamma, np.arange(max_step)) * r) for _ in range(max_step)]
             q_n.extend(q)
         q_n = (q_n - np.mean(q_n, axis=0)) / (np.std(q_n, axis=0) + 1e-7)
-        print(q_n.shape)
         # while True:
         #     index = replay_buffer.store_frame(last_obs)
         #     q_input = replay_buffer.encode_recent_observation()
@@ -245,9 +243,17 @@ def main():
         l_critic = sess.run(loss_critic, feed_dict={current_state: ob_no,
                                                     target: target_ob_no,
                                                     next_state: next_ob_no,
-                                                    done_ph: done_mask})
+                                                    done_ph: done_mask,
+                                                    reward: rew_no})
         print(l_actor, l_critic)
-        sess.run(update_op, feed_dict={current_state: ob_no, target: target_ob_no})
+        sess.run(update_op, feed_dict={current_state: ob_no,
+                                       target: target_ob_no,
+                                       sy_ac_na: ac_na,
+                                       sy_adv_n: q_n,
+                                       next_state: next_ob_no,
+                                       done_ph: done_mask,
+                                       reward: rew_no
+                                       })
         if iteration % update_frequence == 0:
             sess.run(update_target_fn)
 
