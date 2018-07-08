@@ -7,4 +7,4 @@ class ActorCritic(object):
         self.scope = scope
         self.action_size = action_size
 
-    def prepare_loss(self):
+    def prepare_loss(self, ):
