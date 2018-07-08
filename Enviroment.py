@@ -5,7 +5,9 @@ import random
 
 
 class Env(object):
-    def __init__(self, config=dict()):
+    def __init__(self, config=None):
+        if config is None:
+            config = dict()
         self.action_list = ['MoveAhead', 'MoveBack', 'RotateLeft', 'RotateRight']
         self.scene_name = config.get('scene_name', 'bedroom_04')
         self.file_path = config.get('file_path', "data/%s.h5" % self.scene_name)
@@ -51,10 +53,14 @@ class Env(object):
                 self.current_state_id = k
                 break
         self.s_t = self._tile_state(self.current_state_id)
+        self.terminated = False
+        self.collided = False
+        self.reward = 0
 
     def _tile_state(self, observation):
         k = random.randrange(10)
-        return self.feature[observation][k][:, np.newaxis]
+        feature = self.feature[observation][k][:, np.newaxis]
+        return np.tile(feature, (1, HISTORY_LENGTH))
 
     def step(self, action):
         if self.transition_graph[self.current_state_id][action] != -1:
@@ -71,7 +77,12 @@ class Env(object):
 
         self.reward = self._reward(self.terminated, self.collided)
         self.s_t = self._tile_state(self.current_state_id)
-        self.s_t1 = np.append(self.s_t[:, 1:], self.s_t, axis=1)
+        self.s_t1 = np.append(self.s_t[:, 1:], self.state(), axis=1)
+        self.s_t = self.s_t1
+
+    def state(self):
+        k = random.randrange(10)
+        return self.feature[self.current_state_id][k][:, np.newaxis]
 
     @staticmethod
     def _reward(terminal, collided):
@@ -81,6 +92,3 @@ class Env(object):
             return -0.1
         else:
             return -0.01
-
-
-
