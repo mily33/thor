@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.slim.python.slim.nets import resnet_v2
 import tensorflow.contrib.slim as slim
-from ReplayBuffer import ReplayBuffer
+from Enviroment import Env
 
 
 Action = ['MoveAhead', 'MoveBack', 'RotateRight', 'RotateLeft']
@@ -26,12 +26,10 @@ def resnet_fm(input_ph):
 
 
 def model(state_ph, target_ph, ac_dim, scope):
-    state_fm = resnet_fm(state_ph)
-    target_fm = resnet_fm(target_ph)
 
     with tf.variable_scope(scope, reuse=False):
-        current_fc = slim.fully_connected(state_fm, num_outputs=512, activation_fn=None, scope='current_fc')
-        target_fc = slim.fully_connected(target_fm, num_outputs=512, activation_fn=None, scope='target_fc')
+        current_fc = slim.fully_connected(state_ph, num_outputs=512, activation_fn=None, scope='current_fc')
+        target_fc = slim.fully_connected(target_ph, num_outputs=512, activation_fn=None, scope='target_fc')
 
         feature_map = tf.concat([current_fc, target_fc], 1)
 
@@ -57,9 +55,9 @@ def main():
     # ===========
     # Build Model
     # ===========
-    current_state = tf.placeholder(shape=[None, 299, 299, 3], dtype=tf.float32)
-    next_state = tf.placeholder(shape=[None, 299, 299, 3], dtype=tf.float32)
-    target = tf.placeholder(shape=[None, 299, 299, 3], dtype=tf.float32)
+    current_state = tf.placeholder(shape=[None, 8192], dtype=tf.float32)
+    next_state = tf.placeholder(shape=[None, 8192], dtype=tf.float32)
+    target = tf.placeholder(shape=[None, 2048], dtype=tf.float32)
     reward = tf.placeholder(shape=[None], dtype=tf.float32)
     done_ph = tf.placeholder(shape=[None], dtype=tf.float32)
 
@@ -97,18 +95,15 @@ def main():
     #  Init Session
     # ==============
 
-    model_path = '/home/mily/PycharmProjects/models/resnet_v2/resnet_v2_50.ckpt'
-    init_fn = slim.assign_from_checkpoint_fn(model_path, slim.get_model_variables(), ignore_missing_vars=True)
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
-    init_fn(sess)
 
     # ===========
     #   Run Env
     # ===========
 
     # ====== Initialize ======
-    max_len_step = 1000
+    max_len_step = 10000
     max_iteration = 10
     min_timesteps_per_batch = 100
     iteration = 0
@@ -123,47 +118,34 @@ def main():
     # replay_buffer = ReplayBuffer(size=max_size, frame_history_len=frame_num)
 
     # ======= Sample and Store Trajectories ========
-    import ai2thor.controller
-    controller = ai2thor.controller.Controller()
-    controller.start()
-    controller.step(dict(action='Initialize', gridSize=0.1))
-    event = controller.reset('FloorPlan5')
-    target_img = event.cv2image()
-    target_img = processing(target_img)
-
-    def init_state():
-        return 'FloorPlan' + str(np.random.randint(1, 30))
-
+    env = Env({'terminal_id': 10,
+               'file_path': 'data/bedroom_04.h5'})
+    target_state = env.terminal_state.reshape(1, 2048)
     total_timesteps = 0
     while iteration < max_iteration:
         print('************** Iteration %i ***************' % iteration)
         timesteps_this_batch = 0
         paths = []
         while True:
-            obs = controller.reset(init_state())
-            last_obs = obs.cv2image()
-            ob = processing(last_obs)
+            ob = env.reset()
             obs, acs, rewards, next_obs, dones = [], [], [], [], []
             steps = 0
             while True:
-                obs.append(ob[0])
-                ac = sess.run(sy_sample_na, feed_dict={current_state: ob, target: target_img})
+                ob = ob.reshape(1, 8192)
+                obs.append(ob[0, :])
+                ac = sess.run(sy_sample_na, feed_dict={current_state: ob, target: target_state})
                 ac = ac[0]
                 acs.append(ac)
-                event = controller.step(dict(action=Action[ac]))
-                next_ob = processing(event.cv2image())
-                next_obs.append(next_ob[0])
-                if (ob == target_img).all():
-                    rew = 10.0
-                    done = 1.0
-                else:
-                    rew = -0.1
+                next_ob, rew, done = env.step(ac)
+                next_ob = next_ob.reshape(1, 8192)
+                next_obs.append(next_ob[0, :])
 
                 rewards.append(rew)
                 dones.append(done)
                 steps += 1
                 if done or steps > max_len_step:
                     break
+                env.update()
             path = {"observation": np.array(obs),
                     "reward": np.array(rewards),
                     "action": np.array(acs),
@@ -183,7 +165,7 @@ def main():
         next_ob_no = np.concatenate([path['next_ob'] for path in paths])
         rew_no = np.concatenate([path['reward'] for path in paths])
         done_mask = np.concatenate([path['done'] for path in paths])
-        target_ob_no = np.concatenate([target_img for i in range(ob_no.shape[0])])
+        target_ob_no = np.concatenate([target_state for _ in range(ob_no.shape[0])])
 
         q_n = []
         for path in paths:
@@ -240,6 +222,7 @@ def main():
                                                   target: target_ob_no,
                                                   sy_ac_na: ac_na,
                                                   sy_adv_n: q_n})
+        print(target_ob_no.shape, next_ob_no.shape, done_mask.shape, rew_no.shape)
         l_critic = sess.run(loss_critic, feed_dict={current_state: ob_no,
                                                     target: target_ob_no,
                                                     next_state: next_ob_no,
